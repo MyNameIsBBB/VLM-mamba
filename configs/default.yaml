@@ -1,0 +1,29 @@
+model:
+    vision:
+        out_channels: 256
+        pretrained: true
+        freeze_stem: false
+    mamba:
+        depth: 4
+        state_dim: 16
+        conv_kernel: 4
+        expand: 2
+        dropout: 0.1
+    text:
+        vocab_size: 8192
+        max_length: 32
+        dim: 256
+        depth: 4
+        num_heads: 8
+        dropout: 0.1
+    fusion:
+        dim: 256
+        depth: 2
+        num_heads: 8
+        dropout: 0.1
+    head:
+        dropout: 0.1
+data:
+    image_size: 224
+inference:
+    device: cpu

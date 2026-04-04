@@ -1,0 +1,5 @@
+torch>=2.2.0
+torchvision>=0.17.0
+Pillow>=10.0.0
+PyYAML>=6.0.1
+mamba-ssm>=2.2.4; platform_system != "Darwin"
