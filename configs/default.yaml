@@ -25,5 +25,15 @@ model:
         dropout: 0.1
 data:
     image_size: 224
+train:
+    dataset_name: patomp/thai-mscoco-2014-captions
+    split: train
+    batch_size: 16
+    epochs: 5
+    lr: 0.0001
+    weight_decay: 0.0001
+    max_steps_per_epoch: 100
+    num_workers: 2
+    checkpoint_dir: checkpoints
 inference:
     device: cpu

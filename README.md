@@ -19,6 +19,7 @@ VLM-mamba/
 │   └── default.yaml
 ├── data/
 │   ├── __init__.py
+│   ├── dataset.py
 │   └── image_text_dataset.py
 ├── models/
 │   ├── __init__.py
@@ -47,6 +48,7 @@ VLM-mamba/
 ├── .gitignore
 ├── inference.py
 ├── main.py
+├── train.py
 └── requirements.txt
 ```
 
@@ -85,6 +87,7 @@ VLM-mamba/
 ส่วนโหลดข้อมูล
 
 - `data/__init__.py` export dataset หลัก
+- `data/dataset.py` dataset แบบ streaming สำหรับดึง Thai MS-COCO จาก Hugging Face เข้า runtime ตรง ๆ
 - `data/image_text_dataset.py` dataset สำหรับ image-text pair โดยอ่าน annotation แบบ JSON Lines แล้วโหลดรูป + tokenize ข้อความให้พร้อมใช้งาน
 
 ตัวอย่าง format ของ annotation แต่ละบรรทัด
@@ -119,6 +122,7 @@ VLM-mamba/
 
 - `main.py` ใช้สำหรับ smoke test ด้วยข้อมูลสุ่ม เช็กว่า graph ของโมเดลต่อกันครบ
 - `inference.py` ใช้รัน zero-shot inference กับรูปจริงและ candidate texts หลายประโยค
+- `train.py` ใช้เทรนโมเดลเบื้องต้นกับ Thai MS-COCO แบบ streaming โดยไม่ต้องโหลด dataset ลงเครื่องก่อน
 - `requirements.txt` dependency หลักของโปรเจกต์
 - `.gitignore` กันไฟล์ cache, checkpoint, outputs และ artifact ที่ไม่ควรขึ้น git
 
@@ -134,6 +138,8 @@ pip install -r requirements.txt
 
 ถ้าใช้ macOS แล้วติดตั้ง `mamba-ssm` ไม่ผ่าน ก็ยังรัน scaffold ได้อยู่ เพราะในโค้ดมี fallback ให้สำหรับการทดสอบ flow เบื้องต้น
 
+ถ้าจะเทรนบน Colab แนะนำให้ติดตั้งเพิ่ม `causal-conv1d` ด้วย เพราะมักช่วยให้ `mamba-ssm` ลงง่ายขึ้น
+
 ## วิธีพัฒนา
 
 แนวคิดของโปรเจกต์นี้คือ plug-and-play เพราะงั้นเวลาจะพัฒนาต่อ แนะนำ flow ประมาณนี้
@@ -143,6 +149,7 @@ pip install -r requirements.txt
 3. ถ้าจะเปลี่ยน logic รวมภาพกับข้อความ ให้เพิ่ม fusion module ใน `models/fusion/`
 4. ถ้าจะเปลี่ยน task จาก matching ไปเป็น classification หรือ retrieval ก็เพิ่ม head ใหม่ใน `models/heads/`
 5. ถ้าจะใช้ dataset จริง ให้ต่อจาก `data/image_text_dataset.py` ได้เลย หรือแยก dataset class ใหม่สำหรับ format ของตัวเอง
+6. ถ้าจะเทรนกับ Thai MS-COCO แบบไม่โหลดไฟล์หลาย GB ลงเครื่อง ให้ใช้ `data/dataset.py` และ `train.py`
 
 จุดที่ควรรู้ตอนพัฒนาคือ tensor shape ฝั่งภาพ
 
@@ -203,12 +210,95 @@ bash scripts/run_inference.sh ./samples/image.jpg "a dog running on grass"
 
 ถ้ายังไม่มีรูปทดสอบจริง จะลองก็แค่สร้างโฟลเดอร์ `samples/` แล้วเอารูปอะไรก็ได้มาใส่ก่อน เช่น `samples/cat.jpg`
 
+### 3. เทรนเบื้องต้น
+
+ตอนนี้มี `train.py` สำหรับเริ่มเทรนแบบง่าย ๆ แล้ว โดยใช้ positive pair จาก caption จริง และสร้าง negative pair ใน batch ด้วยการสลับ caption
+
+```bash
+python3 train.py --config configs/default.yaml --batch_size 16 --epochs 5 --lr 1e-4
+```
+
+ถ้าต้องการลดเวลาระหว่างลองบนเครื่องหรือบน Colab ให้ลดจำนวน step ต่อ epoch ได้
+
+```bash
+python3 train.py --config configs/default.yaml --max_steps_per_epoch 20
+```
+
+checkpoint จะถูกเซฟไว้ในโฟลเดอร์ `checkpoints/`
+
+## วิธีดึง Dataset Thai MS-COCO มาเทรน
+
+dataset นี้ขนาดใหญ่ ถ้าจะทำบน Colab ไม่ค่อยคุ้มที่จะโหลดลงเครื่องแล้วอัปขึ้นไปใหม่ วิธีที่ตรงกว่า คือให้ runtime ดึงจาก Hugging Face ตรง ๆ ผ่าน `datasets`
+
+ในโปรเจกต์นี้มีตัวอย่างไว้แล้วใน `data/dataset.py` ชื่อคลาส `ThaiCOCODataset` โดยใช้ streaming mode เพื่อประหยัด RAM และไม่ต้องรอโหลดทั้งชุดก่อนเริ่ม
+
+แนวคิดคร่าว ๆ คือ
+
+1. ใช้ `load_dataset("patomp/thai-mscoco-2014-captions", streaming=True)`
+2. อ่านทีละตัวอย่างจาก stream
+3. แปลงรูปเป็น RGB แล้วค่อยส่งเข้า transform
+4. ส่ง caption ต่อให้ tokenizer ในขั้น collate ของ `train.py`
+
+ข้อดีคือเหมาะกับ Colab มากกว่า เพราะเริ่มเทรนได้เลยโดยไม่ต้องจัดการไฟล์ dataset ก้อนใหญ่ด้วยตัวเอง
+
+## ขั้นตอนรันเทรนบน Colab แบบ Step-by-Step
+
+ถ้าจะเอาโปรเจกต์นี้ขึ้น Colab แล้วเริ่มเทรนตาม flow ที่ค่อนข้างตรงไปตรงมา ทำตามนี้ได้เลย
+
+### Step A: ติดตั้ง library ที่ต้องใช้
+
+```python
+!pip install -r requirements.txt
+!pip install causal-conv1d
+```
+
+ถ้าจะติดตั้งแยกเองแบบ explicit ก็ใช้ได้เหมือนกัน
+
+```python
+!pip install mamba-ssm causal-conv1d datasets timm
+```
+
+### Step B: ดึงโค้ดจาก GitHub เข้า Colab
+
+เปลี่ยน URL ให้ตรงกับ repo จริงของคุณก่อนใช้งาน
+
+```python
+!git clone https://github.com/MyNameIsBBB/VLM-mamba.git
+%cd VLM-mamba
+```
+
+### Step C: เริ่มเทรน
+
+```python
+!python train.py --batch_size 16 --epochs 5 --lr 1e-4
+```
+
+ถ้าอยากให้ลองเร็วขึ้นใน Colab ก่อน ควรเริ่มจาก step น้อย ๆ เช่น
+
+```python
+!python train.py --batch_size 8 --epochs 1 --max_steps_per_epoch 20 --lr 1e-4
+```
+
+### Step D: เอา checkpoint ไปใช้ต่อ
+
+หลังเทรนเสร็จ จะมีไฟล์ใน `checkpoints/` เช่น `svlb_epoch_1.pth` แล้วค่อยเอาไปใช้กับ `inference.py` ได้
+
+```python
+!python inference.py \
+  --config configs/default.yaml \
+  --image ./samples/image.jpg \
+  --checkpoint ./checkpoints/svlb_epoch_1.pth \
+  --text "แมวกำลังนอนบนโซฟา" \
+  --text "รถบรรทุกจอดอยู่หน้าอาคาร"
+```
+
 ## วิธี test ตอนนี้
 
 ตอนนี้ใน repo ยังไม่มี unit test หรือ integration test แบบเต็ม ๆ นะ มีเป็นการทดสอบเชิงใช้งานอยู่ 2 แบบ
 
 1. `main.py` สำหรับ smoke test
 2. `inference.py` สำหรับลองวิ่งกับรูปจริง + ข้อความจริง
+3. `train.py` สำหรับเช็ก training loop กับ dataset stream แบบ end-to-end
 
 ถ้าจะเช็ก syntax ทั้งโปรเจกต์แบบเร็ว ๆ ใช้ได้แบบนี้
 
@@ -222,12 +312,14 @@ python3 -m compileall .
 2. test สำหรับ dataset loading และ tokenization
 3. test สำหรับ model forward pass ด้วย input ขนาดเล็ก
 4. test สำหรับ config validation
+5. test สำหรับ training step และ loss computation
 
 ## หมายเหตุเล็กน้อย
 
 - ตอนนี้ tokenizer เป็นเวอร์ชันง่าย ๆ เอาไว้ให้ scaffold เดินได้ก่อน ยังไม่ใช่ production tokenizer
 - zero-shot ตอนนี้เป็นแนว score ranking จาก head ที่ประกอบไว้ ถ้าจะให้คุณภาพดีจริงควรมี pretrained checkpoint หรือ training pipeline เพิ่ม
 - ถ้า `mamba_ssm` ยังไม่พร้อม ระบบจะ fallback ไปใช้ stub เพื่อให้ทดลอง architecture flow ได้ก่อน
+- training loop ตอนนี้เป็น baseline สำหรับเริ่มทดลองก่อน ถ้าจะใช้จริงควรเพิ่ม validation, scheduler, mixed precision และ retrieval-style loss ที่เหมาะกับงานมากขึ้น
 
 ## สรุปสั้น ๆ
 
