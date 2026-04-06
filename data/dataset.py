@@ -36,7 +36,7 @@ class ThaiCOCODataset(IterableDataset[dict[str, Tensor | str]]):
             if not isinstance(image, Image.Image):
                 raise TypeError("Expected a PIL image from the Hugging Face dataset stream.")
 
-            caption = str(example["caption"])
+            caption = str(example["th_sentences_raw"][0])
             if self.transform is not None:
                 image = self.transform(image)
 
