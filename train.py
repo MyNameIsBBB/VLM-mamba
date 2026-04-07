@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 import torch
@@ -22,6 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--max_steps_per_epoch", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
+    parser.add_argument("--temperature", type=float, default=None)
+    parser.add_argument("--plot_path", type=str, default=None)
+    parser.add_argument("--history_path", type=str, default=None)
     return parser.parse_args()
 
 
@@ -47,6 +51,7 @@ def compute_matching_loss(
     attention_mask: Tensor,
     criterion: nn.Module,
     device: torch.device,
+    temperature: float,
 ) -> tuple[Tensor, Tensor, Tensor]:
     images = images.to(device)
     input_ids = input_ids.to(device)
@@ -73,7 +78,8 @@ def compute_matching_loss(
         logits = positive_logits
         labels = torch.ones_like(positive_logits).to(device)
 
-    loss = criterion(logits, labels)
+    scaled_logits = logits / temperature
+    loss = criterion(scaled_logits, labels)
     return loss, logits.detach(), labels.detach()
 def main() -> None:
     args = parse_args()
@@ -91,6 +97,9 @@ def main() -> None:
     learning_rate = args.lr or train_config["lr"]
     num_workers = args.num_workers if args.num_workers is not None else train_config["num_workers"]
     max_steps_per_epoch = args.max_steps_per_epoch or train_config["max_steps_per_epoch"]
+    temperature = args.temperature or train_config.get("temperature", 1.0)
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
 
     tokenizer = SimpleTokenizer(vocab_size=config["model"]["text"]["vocab_size"])
     image_transform = build_image_transform(config["data"]["image_size"])
@@ -112,6 +121,14 @@ def main() -> None:
     checkpoint_dir = Path(train_config["checkpoint_dir"])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    plot_path = Path(args.plot_path) if args.plot_path else checkpoint_dir / "train_curves.png"
+    history_path = Path(args.history_path) if args.history_path else checkpoint_dir / "train_history.csv"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+
+    step_losses: list[float] = []
+    epoch_losses: list[float] = []
+    epoch_accuracies: list[float] = []
+
     for epoch in range(1, epochs + 1):
         model.train()
         running_loss = 0.0
@@ -129,13 +146,15 @@ def main() -> None:
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 criterion=criterion,
-                device=device
+                device=device,
+                temperature=temperature,
             )
             loss.backward()
             optimizer.step()
 
             running_loss += float(loss.item())
             running_accuracy += float(binary_accuracy(logits, labels).item())
+            step_losses.append(float(loss.item()))
 
             if step % 10 == 0 or step == 1:
                 print(
@@ -145,9 +164,51 @@ def main() -> None:
             if step >= max_steps_per_epoch:
                 break
 
+        epoch_loss = running_loss / step
+        epoch_accuracy = running_accuracy / step
+        epoch_losses.append(epoch_loss)
+        epoch_accuracies.append(epoch_accuracy)
+
+        print(f"epoch={epoch} done loss={epoch_loss:.4f} accuracy={epoch_accuracy:.4f}")
+
         checkpoint_path = checkpoint_dir / f"svlb_epoch_{epoch}.pth"
         torch.save(model.state_dict(), checkpoint_path)
         print(f"saved checkpoint: {checkpoint_path}")
+
+    with history_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["epoch", "loss", "accuracy"])
+        for epoch_idx, (loss_value, accuracy_value) in enumerate(zip(epoch_losses, epoch_accuracies), start=1):
+            writer.writerow([epoch_idx, loss_value, accuracy_value])
+    print(f"saved history: {history_path}")
+
+    try:
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+        axes[0].plot(range(1, len(step_losses) + 1), step_losses, label="train loss", color="tab:red")
+        axes[0].set_title("Step Loss")
+        axes[0].set_xlabel("step")
+        axes[0].set_ylabel("loss")
+        axes[0].grid(alpha=0.2)
+
+        epochs_axis = list(range(1, len(epoch_losses) + 1))
+        axes[1].plot(epochs_axis, epoch_losses, label="epoch loss", color="tab:blue")
+        axes[1].plot(epochs_axis, epoch_accuracies, label="epoch accuracy", color="tab:green")
+        axes[1].set_title("Epoch Curves")
+        axes[1].set_xlabel("epoch")
+        axes[1].set_ylabel("value")
+        axes[1].grid(alpha=0.2)
+        axes[1].legend()
+
+        fig.tight_layout()
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(plot_path, dpi=150)
+        plt.close(fig)
+        print(f"saved curves: {plot_path}")
+    except ImportError:
+        print("matplotlib is not installed; skipped curve plotting.")
 
 
 if __name__ == "__main__":

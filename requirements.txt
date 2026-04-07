@@ -4,3 +4,4 @@ Pillow>=10.0.0
 PyYAML>=6.0.1
 datasets>=2.19.0
 mamba-ssm>=2.2.4; platform_system != "Darwin"
+matplotlib>=3.8.0
