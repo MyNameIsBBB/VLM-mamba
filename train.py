@@ -79,7 +79,11 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     train_config = config["train"]
-    device_name = args.device or config["inference"].get("device", "cpu")
+    device_name = (
+        args.device
+        or train_config.get("device")
+        or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     device = torch.device(device_name)
 
     batch_size = args.batch_size or train_config["batch_size"]

@@ -52,7 +52,10 @@ class MambaSequenceBackbone(SequenceBackbone):
         super().__init__()
         self.norms = nn.ModuleList([nn.LayerNorm(dim) for _ in range(depth)])
         self.layers = nn.ModuleList()
+        self.cpu_fallback_layers = nn.ModuleList()
         self.dropout = nn.Dropout(dropout)
+        self.using_mamba = MambaLayer is not None
+        self._cpu_fallback_warning_shown = False
 
         if MambaLayer is None:
             warnings.warn(
@@ -71,11 +74,24 @@ class MambaSequenceBackbone(SequenceBackbone):
                         expand=expand,
                     )
                 )
+                self.cpu_fallback_layers.append(
+                    FallbackSelectiveSSM(dim=dim, conv_kernel=conv_kernel, dropout=dropout)
+                )
 
         self.output_norm = nn.LayerNorm(dim)
 
     def forward(self, tokens: Tensor) -> Tensor:
         hidden = tokens
-        for norm, layer in zip(self.norms, self.layers):
+        layers = self.layers
+        if self.using_mamba and not hidden.is_cuda:
+            if not self._cpu_fallback_warning_shown:
+                warnings.warn(
+                    "mamba_ssm CUDA kernels require CUDA tensors. Using CPU fallback selective SSM layers instead.",
+                    stacklevel=2,
+                )
+                self._cpu_fallback_warning_shown = True
+            layers = self.cpu_fallback_layers
+
+        for norm, layer in zip(self.norms, layers):
             hidden = hidden + self.dropout(layer(norm(hidden)))
         return self.output_norm(hidden)

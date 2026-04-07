@@ -40,10 +40,12 @@ class SelectiveVisionLanguageBackbone(nn.Module):
         self.prediction_head = prediction_head
 
     def encode_image(self, images: Tensor) -> tuple[Tensor, tuple[int, int]]:
+        device = next(self.parameters()).device
+        images = images.to(device)
         spatial_features = self.vision_backbone(images)
         vision_tokens, spatial_size = spatial_to_sequence(spatial_features)
+        vision_tokens = vision_tokens.to(device)
         return self.sequence_backbone(vision_tokens), spatial_size
-
     def forward(
         self,
         images: Tensor,

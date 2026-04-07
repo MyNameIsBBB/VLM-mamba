@@ -29,7 +29,11 @@ class TextTransformerEncoder(TextBackbone):
             batch_first=True,
             norm_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=depth,
+            enable_nested_tensor=False,
+        )
         self.output_norm = nn.LayerNorm(dim)
 
     def forward(self, token_ids: Tensor, attention_mask: Tensor | None = None) -> TextBackboneOutput:
