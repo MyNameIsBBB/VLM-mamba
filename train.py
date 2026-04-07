@@ -46,26 +46,35 @@ def compute_matching_loss(
     input_ids: Tensor,
     attention_mask: Tensor,
     criterion: nn.Module,
+    device: torch.device,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    positive_logits = model(images=images, token_ids=input_ids, attention_mask=attention_mask).match_logit
-    logits = positive_logits
-    labels = torch.ones_like(positive_logits)
+    images = images.to(device)
+    input_ids = input_ids.to(device)
+    attention_mask = attention_mask.to(device)
 
+    positive_logits = model(images=images, token_ids=input_ids, attention_mask=attention_mask).match_logit
+    
     if images.size(0) > 1:
-        negative_input_ids = torch.roll(input_ids, shifts=1, dims=0)
-        negative_attention_mask = torch.roll(attention_mask, shifts=1, dims=0)
+        negative_input_ids = torch.roll(input_ids, shifts=1, dims=0).to(device)
+        negative_attention_mask = torch.roll(attention_mask, shifts=1, dims=0).to(device)
+        
         negative_logits = model(
             images=images,
             token_ids=negative_input_ids,
             attention_mask=negative_attention_mask,
         ).match_logit
+        
         logits = torch.cat([positive_logits, negative_logits], dim=0)
-        labels = torch.cat([torch.ones_like(positive_logits), torch.zeros_like(negative_logits)], dim=0)
+        labels = torch.cat([
+            torch.ones_like(positive_logits), 
+            torch.zeros_like(negative_logits)
+        ], dim=0).to(device) 
+    else:
+        logits = positive_logits
+        labels = torch.ones_like(positive_logits).to(device)
 
     loss = criterion(logits, labels)
     return loss, logits.detach(), labels.detach()
-
-
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -116,6 +125,7 @@ def main() -> None:
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 criterion=criterion,
+                device=device
             )
             loss.backward()
             optimizer.step()
