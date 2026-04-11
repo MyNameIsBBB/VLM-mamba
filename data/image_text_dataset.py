@@ -8,7 +8,7 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from utils.preprocessing import SimpleTokenizer
+from utils.preprocessing import MultilingualTokenizer
 
 
 class ImageTextPairDataset(Dataset[dict[str, Tensor | str]]):
@@ -16,7 +16,7 @@ class ImageTextPairDataset(Dataset[dict[str, Tensor | str]]):
         self,
         annotations_path: str | Path,
         image_root: str | Path,
-        tokenizer: SimpleTokenizer,
+        tokenizer: MultilingualTokenizer,
         image_transform: Callable[[Image.Image], Tensor],
         max_length: int,
     ) -> None:

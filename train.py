@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     parser.add_argument("--history_path", type=str, default=None)
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume training")
     return parser.parse_args()
 
 
@@ -138,7 +139,29 @@ def main() -> None:
     epoch_losses: list[float] = []
     epoch_accuracies: list[float] = []
 
-    for epoch in range(1, epochs + 1):
+    start_epoch = 1
+    if args.checkpoint and Path(args.checkpoint).exists():
+        print(f">>> Resuming from checkpoint: {args.checkpoint}")
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"])
+            if "optimizer_state_dict" in checkpoint:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            start_epoch = checkpoint.get("epoch", 0) + 1
+        else:
+            model.load_state_dict(checkpoint)
+            if "epoch_" in args.checkpoint:
+                try:
+                    start_epoch = int(args.checkpoint.split("epoch_")[-1].split(".")[0]) + 1
+                except ValueError:
+                    pass
+
+    if start_epoch > epochs:
+        print(f">>> Checkpoint is already at epoch {start_epoch - 1}, nothing to train for epochs={epochs}.")
+        return
+
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         running_loss = 0.0
         running_image_r1 = 0.0
@@ -206,7 +229,15 @@ def main() -> None:
         )
 
         checkpoint_path = checkpoint_dir / f"svlb_epoch_{epoch}.pth"
-        torch.save(model.state_dict(), checkpoint_path)
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "config": config,
+            },
+            checkpoint_path,
+        )
         print(f"saved checkpoint: {checkpoint_path}")
 
     with history_path.open("w", newline="", encoding="utf-8") as handle:

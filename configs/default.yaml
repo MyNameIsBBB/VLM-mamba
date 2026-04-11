@@ -15,7 +15,7 @@ model:
         tokenizer_use_fast: false
         freeze_backbone: false
         vocab_size: 8192
-        max_length: 48
+        max_length: 64
         dim: 256
         depth: 4
         num_heads: 8
@@ -32,7 +32,7 @@ data:
 train:
     dataset_name: patomp/thai-mscoco-2014-captions
     split: train
-    batch_size: 32
+    batch_size: 16
     epochs: 5
     lr: 0.0001
     temperature: 0.07
