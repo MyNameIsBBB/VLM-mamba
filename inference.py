@@ -7,7 +7,7 @@ import torch
 from PIL import Image, UnidentifiedImageError
 
 from models import build_svlb_from_config
-from utils import SimpleTokenizer, build_image_transform, load_config, sigmoid_confidence
+from utils import MultilingualTokenizer, build_image_transform, load_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +32,11 @@ def main() -> None:
             f"Image file not found: {image_path}. Replace --image with a real file path, for example --image ./samples/cat.jpg"
         )
 
-    tokenizer = SimpleTokenizer(vocab_size=config["model"]["text"]["vocab_size"])
+    tokenizer = MultilingualTokenizer(
+        model_name=config["model"]["text"]["pretrained_model_name"],
+        max_length=config["model"]["text"]["max_length"],
+        use_fast=config["model"]["text"].get("tokenizer_use_fast", True),
+    )
     transform = build_image_transform(config["data"]["image_size"])
     model = build_svlb_from_config(config).to(device)
 
@@ -57,9 +61,9 @@ def main() -> None:
 
     with torch.inference_mode():
         output = model(images=image_batch, token_ids=input_ids, attention_mask=attention_mask)
-        probabilities = sigmoid_confidence(output.match_logit)
+        scores = output.match_logit
 
-    ranked = sorted(zip(args.texts, probabilities.tolist()), key=lambda item: item[1], reverse=True)
+    ranked = sorted(zip(args.texts, scores.tolist()), key=lambda item: item[1], reverse=True)
     for candidate_text, score in ranked:
         print(f"{score:.4f}\t{candidate_text}")
 

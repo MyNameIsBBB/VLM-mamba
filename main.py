@@ -5,7 +5,7 @@ import argparse
 import torch
 
 from models import build_svlb_from_config
-from utils import SimpleTokenizer, load_config
+from utils import MultilingualTokenizer, load_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,7 +23,11 @@ def main() -> None:
     model.eval()
 
     image_size = config["data"]["image_size"]
-    tokenizer = SimpleTokenizer(vocab_size=config["model"]["text"]["vocab_size"])
+    tokenizer = MultilingualTokenizer(
+        model_name=config["model"]["text"]["pretrained_model_name"],
+        max_length=config["model"]["text"]["max_length"],
+        use_fast=config["model"]["text"].get("tokenizer_use_fast", True),
+    )
     encoded = tokenizer.batch_encode([args.text] * args.batch_size, max_length=config["model"]["text"]["max_length"])
     images = torch.randn(args.batch_size, 3, image_size, image_size)
 
@@ -31,6 +35,9 @@ def main() -> None:
         output = model(images=images, token_ids=encoded["input_ids"], attention_mask=encoded["attention_mask"])
 
     print("match_logit:", output.match_logit)
+    print("similarity_matrix:", tuple(output.similarity_matrix.shape))
+    print("image_embedding:", tuple(output.image_embedding.shape))
+    print("text_embedding:", tuple(output.text_embedding.shape))
     print("vision_tokens:", tuple(output.vision_tokens.shape))
     print("text_tokens:", tuple(output.text_tokens.shape))
     print("spatial_size:", output.spatial_size)

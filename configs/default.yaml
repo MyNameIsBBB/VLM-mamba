@@ -1,40 +1,49 @@
 model:
-  vision:
-    out_channels: 256
-    pretrained: true
-    freeze_stem: false
-  mamba:
-    depth: 4
-    state_dim: 16
-    conv_kernel: 4
-    expand: 2
-    dropout: 0.1
-  text:
-    vocab_size: 8192
-    max_length: 32
-    dim: 256
-    depth: 4
-    num_heads: 8
-    dropout: 0.1
-  fusion:
-    dim: 256
-    depth: 2
-    num_heads: 8
-    dropout: 0.1
-  head:
-    dropout: 0.1
+    vision:
+        out_channels: 256
+        pretrained: true
+        freeze_stem: false
+        spatial_grid_size: [7, 7]
+    mamba:
+        depth: 4
+        state_dim: 16
+        conv_kernel: 4
+        expand: 2
+        dropout: 0.1
+    text:
+        pretrained_model_name: airesearch/wangchanberta-base-att-spm-uncased
+        tokenizer_use_fast: false
+        freeze_backbone: false
+        vocab_size: 8192
+        max_length: 48
+        dim: 256
+        depth: 4
+        num_heads: 8
+        dropout: 0.1
+    fusion:
+        dim: 256
+        depth: 2
+        num_heads: 8
+        dropout: 0.1
+    head:
+        dropout: 0.1
 data:
-  image_size: 224
+    image_size: 224
 train:
-  dataset_name: patomp/thai-mscoco-2014-captions
-  split: train
-  batch_size: 32
-  epochs: 5
-  lr: 0.0005
-  temperature: 0.07
-  weight_decay: 0.0001
-  max_steps_per_epoch: 1000
-  num_workers: 2
-  checkpoint_dir: checkpoints
+    dataset_name: patomp/thai-mscoco-2014-captions
+    split: train
+    batch_size: 32
+    epochs: 5
+    lr: 0.0001
+    temperature: 0.07
+    weight_decay: 0.0001
+    max_steps_per_epoch: 1000
+    num_workers: 2
+    use_all_captions: true
+    shuffle_buffer_size: 2048
+    hard_negative_margin: 0.2
+    hard_negative_weight: 0.1
+    gradient_clip_norm: 1.0
+    checkpoint_dir: checkpoints
 inference:
-  device: cpu
+    device: cuda

@@ -3,5 +3,8 @@ torchvision>=0.17.0
 Pillow>=10.0.0
 PyYAML>=6.0.1
 datasets>=2.19.0
+transformers>=4.40.0
+sentencepiece>=0.2.0
+protobuf>=5.28.0
 mamba-ssm>=2.2.4; platform_system != "Darwin"
 matplotlib>=3.8.0

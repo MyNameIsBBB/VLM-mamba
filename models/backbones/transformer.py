@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor, nn
+from transformers import AutoModel
 
 from models.interfaces import TextBackbone, TextBackboneOutput
 
@@ -55,3 +56,42 @@ class TextTransformerEncoder(TextBackbone):
             pooled = (encoded * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
 
         return TextBackboneOutput(sequence=encoded, pooled=pooled)
+
+
+class PretrainedMultilingualTextEncoder(TextBackbone):
+    def __init__(
+        self,
+        model_name: str,
+        max_length: int,
+        dim: int,
+        dropout: float,
+        freeze_backbone: bool = False,
+    ) -> None:
+        super().__init__()
+        self.model_name = model_name
+        self.max_length = max_length
+        self.backbone = AutoModel.from_pretrained(model_name)
+        hidden_size = int(self.backbone.config.hidden_size)
+        self.projection = nn.Identity() if hidden_size == dim else nn.Linear(hidden_size, dim)
+        self.output_norm = nn.LayerNorm(dim)
+        self.dropout = nn.Dropout(dropout)
+
+        if freeze_backbone:
+            for parameter in self.backbone.parameters():
+                parameter.requires_grad = False
+
+    def forward(self, token_ids: Tensor, attention_mask: Tensor | None = None) -> TextBackboneOutput:
+        outputs = self.backbone(
+            input_ids=token_ids,
+            attention_mask=attention_mask,
+            return_dict=True,
+        )
+        hidden = self.output_norm(self.dropout(self.projection(outputs.last_hidden_state)))
+
+        if attention_mask is None:
+            pooled = hidden.mean(dim=1)
+        else:
+            weights = attention_mask.unsqueeze(-1).to(dtype=hidden.dtype)
+            pooled = (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
+
+        return TextBackboneOutput(sequence=hidden, pooled=pooled)
