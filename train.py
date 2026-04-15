@@ -12,11 +12,11 @@ from torch.utils.data import DataLoader
 
 from data import ThaiCOCODataset
 from models import build_svlb_from_config
-from utils import MultilingualTokenizer, build_image_transform, load_config, retrieval_topk_accuracy
+from utils import MultilingualTokenizer, load_config
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train S-VLB with a streaming Thai MS-COCO dataset.")
+    parser = argparse.ArgumentParser(description="Train S-VLB (Text-only) with a streaming Thai MS-COCO dataset.")
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
@@ -24,68 +24,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num_workers", type=int, default=None)
     parser.add_argument("--max_steps_per_epoch", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
-    parser.add_argument("--temperature", type=float, default=None)
     parser.add_argument("--plot_path", type=str, default=None)
     parser.add_argument("--history_path", type=str, default=None)
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint to resume training")
     return parser.parse_args()
 
 
-def build_collate_fn(tokenizer: MultilingualTokenizer, max_length: int):
-    def collate_fn(batch: list[dict[str, Tensor | str]]) -> dict[str, Tensor | list[str]]:
-        images = torch.stack([item["image"] for item in batch], dim=0)
+class TextCollateFn:
+    def __init__(self, tokenizer: MultilingualTokenizer, max_length: int):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __call__(self, batch: list[dict[str, str]]) -> dict[str, Tensor | list[str]]:
         captions = [str(item["caption"]) for item in batch]
-        image_ids = torch.tensor([int(item["image_id"]) for item in batch], dtype=torch.long)
-        encoded = tokenizer.batch_encode(captions, max_length=max_length)
+        encoded = self.tokenizer.batch_encode(captions, max_length=self.max_length)
         return {
-            "images": images,
             "captions": captions,
-            "image_ids": image_ids,
             "input_ids": encoded["input_ids"],
             "attention_mask": encoded["attention_mask"],
         }
 
-    return collate_fn
 
-
-def compute_contrastive_loss(
+def compute_lm_loss(
     model: nn.Module,
-    images: Tensor,
     input_ids: Tensor,
     attention_mask: Tensor,
-    image_ids: Tensor,
     device: torch.device,
-    hard_negative_margin: float,
-    hard_negative_weight: float,
-) -> tuple[Tensor, Tensor, Tensor]:
-    images = images.to(device)
+) -> Tensor:
     input_ids = input_ids.to(device)
     attention_mask = attention_mask.to(device)
-    image_ids = image_ids.to(device)
 
-    output = model(images=images, token_ids=input_ids, attention_mask=attention_mask)
-    similarity = output.similarity_matrix
-    positive_mask = image_ids.unsqueeze(1) == image_ids.unsqueeze(0)
+    # Standard Next Token Prediction implementation using shifted inputs
+    inputs = input_ids[:, :-1]
+    targets = input_ids[:, 1:]
+    mask = attention_mask[:, :-1]
 
-    image_targets = positive_mask.float()
-    image_targets = image_targets / image_targets.sum(dim=1, keepdim=True).clamp_min(1.0)
-    text_targets = image_targets.transpose(0, 1)
-
-    image_loss = -(image_targets * F.log_softmax(similarity, dim=1)).sum(dim=1).mean()
-    text_loss = -(text_targets * F.log_softmax(similarity.transpose(0, 1), dim=1)).sum(dim=1).mean()
-    loss = 0.5 * (image_loss + text_loss)
-
-    if hard_negative_weight > 0 and similarity.size(0) > 1:
-        positive_scores = (similarity * image_targets).sum(dim=1)
-        hard_negative_scores = similarity.masked_fill(positive_mask, float("-inf")).max(dim=1).values
-        valid_rows = torch.isfinite(hard_negative_scores)
-        if valid_rows.any():
-            hard_negative_loss = F.relu(
-                hard_negative_margin + hard_negative_scores[valid_rows] - positive_scores[valid_rows]
-            ).mean()
-            loss = loss + hard_negative_weight * hard_negative_loss
-
-    return loss, similarity.detach(), positive_mask.detach()
+    logits, _ = model(token_ids=inputs, attention_mask=mask)
+    
+    logits_flat = logits.reshape(-1, logits.size(-1))
+    targets_flat = targets.contiguous().view(-1)
+    
+    loss_unreduced = F.cross_entropy(logits_flat, targets_flat, reduction='none')
+    
+    target_mask = attention_mask[:, 1:].contiguous().view(-1).float()
+    loss = (loss_unreduced * target_mask).sum() / target_mask.sum().clamp_min(1.0)
+    
+    return loss
 
 
 def main() -> None:
@@ -104,17 +88,15 @@ def main() -> None:
     learning_rate = args.lr or train_config["lr"]
     num_workers = args.num_workers if args.num_workers is not None else train_config["num_workers"]
     max_steps_per_epoch = args.max_steps_per_epoch or train_config["max_steps_per_epoch"]
-    if args.temperature is not None:
-        train_config["temperature"] = args.temperature
+
     tokenizer = MultilingualTokenizer(
         model_name=config["model"]["text"]["pretrained_model_name"],
-        max_length=config["model"]["text"]["max_length"],
+        max_length=config["model"]["max_length"],
         use_fast=config["model"]["text"].get("tokenizer_use_fast", True),
     )
-    image_transform = build_image_transform(config["data"]["image_size"])
+    
     dataset = ThaiCOCODataset(
         split=train_config["split"],
-        transform=image_transform,
         dataset_name=train_config["dataset_name"],
         use_all_captions=train_config.get("use_all_captions", True),
         shuffle_buffer_size=train_config.get("shuffle_buffer_size"),
@@ -123,7 +105,7 @@ def main() -> None:
         dataset,
         batch_size=batch_size,
         num_workers=num_workers,
-        collate_fn=build_collate_fn(tokenizer, config["model"]["text"]["max_length"]),
+        collate_fn=TextCollateFn(tokenizer, config["model"]["max_length"]),
     )
 
     model = build_svlb_from_config(config).to(device)
@@ -137,7 +119,6 @@ def main() -> None:
 
     step_losses: list[float] = []
     epoch_losses: list[float] = []
-    epoch_accuracies: list[float] = []
 
     start_epoch = 1
     if args.checkpoint and Path(args.checkpoint).exists():
@@ -164,25 +145,17 @@ def main() -> None:
     for epoch in range(start_epoch, epochs + 1):
         model.train()
         running_loss = 0.0
-        running_image_r1 = 0.0
-        running_text_r1 = 0.0
 
         for step, batch in enumerate(dataloader, start=1):
-            images = batch["images"].to(device)
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
-            image_ids = batch["image_ids"].to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            loss, similarity, positive_mask = compute_contrastive_loss(
+            loss = compute_lm_loss(
                 model=model,
-                images=images,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                image_ids=image_ids,
                 device=device,
-                hard_negative_margin=train_config.get("hard_negative_margin", 0.2),
-                hard_negative_weight=train_config.get("hard_negative_weight", 0.0),
             )
             loss.backward()
             clip_norm = train_config.get("gradient_clip_norm")
@@ -191,8 +164,6 @@ def main() -> None:
             optimizer.step()
 
             running_loss += float(loss.item())
-            running_image_r1 += float(retrieval_topk_accuracy(similarity, positive_mask, k=1, dim=1).item())
-            running_text_r1 += float(retrieval_topk_accuracy(similarity, positive_mask, k=1, dim=0).item())
             step_losses.append(float(loss.item()))
 
             if step % 10 == 0 or step == 1:
@@ -202,8 +173,6 @@ def main() -> None:
                             f"epoch={epoch}",
                             f"step={step}",
                             f"loss={running_loss / step:.4f}",
-                            f"image_r@1={running_image_r1 / step:.4f}",
-                            f"text_r@1={running_text_r1 / step:.4f}",
                         ]
                     )
                 )
@@ -212,9 +181,7 @@ def main() -> None:
                 break
 
         epoch_loss = running_loss / step
-        epoch_accuracy = 0.5 * ((running_image_r1 / step) + (running_text_r1 / step))
         epoch_losses.append(epoch_loss)
-        epoch_accuracies.append(epoch_accuracy)
 
         print(
             " ".join(
@@ -222,8 +189,6 @@ def main() -> None:
                     f"epoch={epoch}",
                     "done",
                     f"loss={epoch_loss:.4f}",
-                    f"image_r@1={running_image_r1 / step:.4f}",
-                    f"text_r@1={running_text_r1 / step:.4f}",
                 ]
             )
         )
@@ -242,9 +207,9 @@ def main() -> None:
 
     with history_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["epoch", "loss", "retrieval_r1"])
-        for epoch_idx, (loss_value, accuracy_value) in enumerate(zip(epoch_losses, epoch_accuracies), start=1):
-            writer.writerow([epoch_idx, loss_value, accuracy_value])
+        writer.writerow(["epoch", "loss"])
+        for epoch_idx, loss_value in enumerate(epoch_losses, start=1):
+            writer.writerow([epoch_idx, loss_value])
     print(f"saved history: {history_path}")
 
     try:
@@ -260,10 +225,9 @@ def main() -> None:
 
         epochs_axis = list(range(1, len(epoch_losses) + 1))
         axes[1].plot(epochs_axis, epoch_losses, label="epoch loss", color="tab:blue")
-        axes[1].plot(epochs_axis, epoch_accuracies, label="epoch accuracy", color="tab:green")
         axes[1].set_title("Epoch Curves")
         axes[1].set_xlabel("epoch")
-        axes[1].set_ylabel("value")
+        axes[1].set_ylabel("loss")
         axes[1].grid(alpha=0.2)
         axes[1].legend()
 

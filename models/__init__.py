@@ -1,7 +1,6 @@
-from .svlb import SelectiveVisionLanguageBackbone, SelectiveVisionLanguageOutput, build_svlb_from_config
+from .svlb import HybridTextModel, build_svlb_from_config
 
 __all__ = [
-    "SelectiveVisionLanguageBackbone",
-    "SelectiveVisionLanguageOutput",
+    "HybridTextModel",
     "build_svlb_from_config",
 ]

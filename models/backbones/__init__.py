@@ -1,5 +1,6 @@
-from .cnn import MobileNetV3Encoder
-from .mamba import MambaSequenceBackbone
-from .transformer import TextTransformerEncoder
+from __future__ import annotations
 
-__all__ = ["MobileNetV3Encoder", "MambaSequenceBackbone", "TextTransformerEncoder"]
+# We only export mamba for the text-only hybrid structure natively.
+from .mamba import MambaSequenceBackbone
+
+__all__ = ["MambaSequenceBackbone"]
